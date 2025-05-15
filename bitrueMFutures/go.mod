@@ -1,4 +1,4 @@
-module github.com/lackyband/gox/bitrueFutures
+module github.com/lackyband/gox/bitrueMFutures
 
 go 1.22.2
 
