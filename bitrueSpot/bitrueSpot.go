@@ -389,20 +389,33 @@ func (c *BitrueClient) doRequest(method, endpoint string, params url.Values, bod
 	}
 
 	if signed {
-		timestamp := time.Now().UnixMilli()
 		if params == nil {
 			params = url.Values{}
 		}
+		timestamp := time.Now().UnixMilli()
 		params.Set("timestamp", strconv.FormatInt(timestamp, 10))
-		u.RawQuery = params.Encode()
-		totalParams = u.RawQuery
+		signingString := params.Encode()
 		if body != nil {
-			totalParams += "&" + body.Encode()
+			signingString += "&" + body.Encode()
 		}
-		signature := c.generateSignature(totalParams)
-		params.Set("signature", signature)
-		u.RawQuery = params.Encode()
+		fmt.Printf("DEBUG SIGNING STRING: %s\n", signingString)
+		signature := c.GenerateSignature(signingString)
+		fmt.Printf("DEBUG SIGNATURE: %s\n", signature)
+		// DO NOT add signature to params for encoding
+		// Instead, append it manually to keep it last
+		signedQuery := params.Encode() + "&signature=" + signature
+		u.RawQuery = signedQuery
 		req.URL = u
+	}
+
+	// DEBUG: Print request details for troubleshooting
+	fmt.Printf("\nDEBUG REQUEST URL: %s\n", req.URL.String())
+	fmt.Printf("DEBUG REQUEST HEADERS:\n")
+	for k, v := range req.Header {
+		fmt.Printf("  %s: %s\n", k, v)
+	}
+	if body != nil {
+		fmt.Printf("DEBUG REQUEST BODY: %s\n", body.Encode())
 	}
 
 	resp, err := c.httpClient.Do(req)
@@ -424,7 +437,7 @@ func (c *BitrueClient) doRequest(method, endpoint string, params url.Values, bod
 }
 
 // GenerateSignature creates an HMAC SHA256 signature
-func (c *BitrueClient) generateSignature(totalParams string) string {
+func (c *BitrueClient) GenerateSignature(totalParams string) string {
 	mac := hmac.New(sha256.New, []byte(c.secretKey))
 	mac.Write([]byte(totalParams))
 	return hex.EncodeToString(mac.Sum(nil))
