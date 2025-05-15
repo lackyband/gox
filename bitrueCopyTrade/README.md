@@ -14,7 +14,7 @@ Clone or include the `bitrueCopyTrade` package in your Go module:
 
 ```bash
 # If the module is hosted on GitHub, replace <repository> with the actual path
-go get github.com/<repository>/bitrueCopyTrade
+go get github.com/lackyband/gox/bitrueCopyTrade
 ```
 
 Alternatively, copy the `bitrueCopyTrade` package into your project directory.
