@@ -83,7 +83,7 @@ func (w *WebSocketClient) Connect(apiKey string) error {
 			w.conn = conn
 			return nil
 		}
-		fmt.Printf("WebSocket connect attempt %d failed: %v, retrying in %v...\n", attempt, err, retryDelay)
+
 		time.Sleep(retryDelay)
 	}
 	return fmt.Errorf("failed to connect to WebSocket after %d attempts: %v", maxRetries, err)
@@ -113,7 +113,7 @@ func (w *WebSocketClient) ReadMessages(isMarket bool) {
 			}
 			_, message, err := w.conn.ReadMessage()
 			if err != nil {
-				fmt.Printf("WebSocket read error: %v\n", err)
+
 				w.Close()
 				return
 			}
@@ -122,7 +122,7 @@ func (w *WebSocketClient) ReadMessages(isMarket bool) {
 			if isMarket {
 				reader, err := gzip.NewReader(bytes.NewReader(message))
 				if err != nil {
-					fmt.Printf("Failed to decompress message: %v\n", err)
+
 					continue
 				}
 				decompressed, err := io.ReadAll(reader)
@@ -154,7 +154,7 @@ func (w *WebSocketClient) ReadMessages(isMarket bool) {
 				select {
 				case w.messageChan <- message:
 				default:
-					fmt.Println("Message channel full, dropping message")
+
 				}
 			}
 		}
@@ -169,7 +169,7 @@ func (w *WebSocketClient) Reconnect(isMarket bool) error {
 		if err := w.Connect(""); err != nil {
 			attempts++
 			backoff := time.Duration(1<<uint(attempts)) * time.Second
-			fmt.Printf("Reconnect attempt %d failed: %v, retrying in %v\n", attempts, err, backoff)
+
 			time.Sleep(backoff)
 			continue
 		}
@@ -236,7 +236,7 @@ func (c *BitrueClient) StartWebSocketUser(listenKey string) error {
 	}
 
 	wsURL := fmt.Sprintf("%s/stream?listenKey=%s", c.wsUserURL, listenKey)
-	fmt.Printf("DEBUG: Connecting to user WebSocket URL: %s\n", wsURL)
+
 	c.wsUserClient = NewWebSocketClient(wsURL)
 	if err := c.wsUserClient.Connect(c.apiKey); err != nil {
 		return fmt.Errorf("failed to connect to WebSocket: %v", err)
@@ -513,7 +513,7 @@ func (c *BitrueClient) DoRequest(method, baseURL, endpoint string, params url.Va
 		}
 
 		if resp.StatusCode == http.StatusServiceUnavailable {
-			fmt.Printf("Attempt %d: 503 Service Unavailable, retrying in %v...\n", attempt, retryDelay)
+
 			time.Sleep(retryDelay)
 			lastErr = fmt.Errorf("unexpected status: %s, body: %s", resp.Status, string(respBody))
 			continue

@@ -271,6 +271,26 @@ func (c *BitrueClient) SubscribeDepth(symbol string, callback WebSocketMessageHa
 	return c.wsMarketClient.conn.WriteJSON(msg)
 }
 
+// SubscribeTrade subscribes to the trade websocket channel for Spot market.
+// NOTE: The channel string 'market_$symbol_trade_ticker' is inferred by analogy to the futures API.
+// Please confirm with Bitrue documentation or support for production use.
+func (c *BitrueClient) SubscribeTrade(symbol string, callback WebSocketMessageHandler) error {
+	if c.wsMarketClient == nil || c.wsMarketClient.conn == nil {
+		return fmt.Errorf("WebSocket client not started")
+	}
+	c.wsMarketClient.SetCallback(callback)
+	channel := "market_$symbol_trade_ticker"
+	channel = strings.Replace(channel, "$symbol", strings.ToLower(symbol), -1)
+	msg := WebSocketMessage{
+		Event: "sub",
+		Params: map[string]interface{}{
+			"channel": channel,
+			"cb_id":   strings.ToLower(symbol),
+		},
+	}
+	return c.wsMarketClient.conn.WriteJSON(msg)
+}
+
 // SubscribeUserOrderUpdate subscribes to the user order update websocket channel
 func (c *BitrueClient) SubscribeUserOrderUpdate(callback WebSocketMessageHandler) error {
 	if c.wsUserClient == nil || c.wsUserClient.conn == nil {
