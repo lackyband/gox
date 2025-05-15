@@ -8,7 +8,8 @@ import (
 
 
 
-func (p *WebSocketPool) Subscribe(channel, symbol, interval string, callback WebSocketMessageHandler) (string, error) {
+// subscriptionType is required to separate trade, depth, etc.
+func (p *WebSocketPool) Subscribe(channel, subscriptionType, symbol, interval string, callback WebSocketMessageHandler) (string, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -44,10 +45,10 @@ func (p *WebSocketPool) Subscribe(channel, symbol, interval string, callback Web
 		Callback: callback,
 	}
 	conn.mu.Unlock()
-	conn.messageRouter.RegisterCallback(subID, channel, callback)
+	conn.messageRouter.RegisterCallback(channel, subscriptionType, callback)
 
 	if len(conn.subscriptions) == 1 {
-		if err := conn.client.Subscribe(channel, symbol, interval, conn.messageRouter.RouteMessage); err != nil {
+		if err := conn.client.Subscribe(channel, subscriptionType, symbol, interval, conn.messageRouter.RouteMessage); err != nil {
 			conn.mu.Lock()
 			delete(conn.subscriptions, subID)
 			conn.mu.Unlock()

@@ -6,34 +6,32 @@ import (
 )
 
 type MessageRouter struct {
-	callbacks    map[string]WebSocketMessageHandler
-	channelIndex map[string]map[string]struct{}
-	mu           sync.RWMutex
+	// callbacks[channel][subscriptionType] = callback
+	callbacks map[string]map[string]WebSocketMessageHandler
+	mu        sync.RWMutex
 }
 
 func NewMessageRouter() *MessageRouter {
 	return &MessageRouter{
-		callbacks:    make(map[string]WebSocketMessageHandler),
-		channelIndex: make(map[string]map[string]struct{}),
+		callbacks: make(map[string]map[string]WebSocketMessageHandler),
 	}
 }
 
-func (r *MessageRouter) RegisterCallback(subID, channel string, callback WebSocketMessageHandler) {
+// subscriptionType could be "trade", "depth", "account", etc.
+func (r *MessageRouter) RegisterCallback(channel, subscriptionType string, callback WebSocketMessageHandler) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-
-	r.callbacks[subID] = callback
-
-	if _, exists := r.channelIndex[channel]; !exists {
-		r.channelIndex[channel] = make(map[string]struct{})
+	if _, exists := r.callbacks[channel]; !exists {
+		r.callbacks[channel] = make(map[string]WebSocketMessageHandler)
 	}
-	r.channelIndex[channel][subID] = struct{}{}
+	r.callbacks[channel][subscriptionType] = callback
 }
 
 func (r *MessageRouter) RouteMessage(message []byte) {
 	var msg struct {
 		Channel string `json:"channel"`
 		Event   string `json:"event"`
+		Type    string `json:"type"` // e.g., "trade", "depth", etc.
 	}
 	if err := json.Unmarshal(message, &msg); err != nil {
 		return
@@ -42,11 +40,18 @@ func (r *MessageRouter) RouteMessage(message []byte) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	if subs, exists := r.channelIndex[msg.Channel]; exists {
-		for subID := range subs {
-			if cb, ok := r.callbacks[subID]; ok {
-				go cb(message)
-			}
+	if typeMap, exists := r.callbacks[msg.Channel]; exists {
+		// Try event first, then type, then fallback (for compatibility)
+		if cb, ok := typeMap[msg.Event]; ok {
+			go cb(message)
+			return
+		}
+		if cb, ok := typeMap[msg.Type]; ok {
+			go cb(message)
+			return
+		}
+		if cb, ok := typeMap[""]; ok {
+			go cb(message)
 		}
 	}
 	// Optionally handle pings, etc.

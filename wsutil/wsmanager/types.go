@@ -12,7 +12,7 @@ type SubscriptionCallback struct {
 }
 
 type WebSocketClientIface interface {
-	Subscribe(channel, symbol, interval string, callback WebSocketMessageHandler) error
+	Subscribe(channel, subscriptionType, symbol, interval string, callback WebSocketMessageHandler) error
 	Unsubscribe(subID string) error
 	Close() error
 	// The following methods are required for testing with the pool manager's processMessages.

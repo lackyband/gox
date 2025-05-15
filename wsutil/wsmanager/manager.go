@@ -19,7 +19,8 @@ func NewWebSocketPoolManager(maxSubsPerConn int, clientFactory func() (WebSocket
 	}
 }
 
-func (m *WebSocketPoolManager) Subscribe(channel, symbol, interval string, callback WebSocketMessageHandler) (string, error) {
+// subscriptionType is required for correct callback grouping
+func (m *WebSocketPoolManager) Subscribe(channel, subscriptionType, symbol, interval string, callback WebSocketMessageHandler) (string, error) {
 
 	m.mu.Lock()
 	pool, exists := m.pools[channel]
@@ -29,7 +30,7 @@ func (m *WebSocketPoolManager) Subscribe(channel, symbol, interval string, callb
 	}
 	m.mu.Unlock()
 
-	return pool.Subscribe(channel, symbol, interval, callback)
+	return pool.Subscribe(channel, subscriptionType, symbol, interval, callback)
 }
 
 func (m *WebSocketPoolManager) Unsubscribe(channel, subID string) error {
