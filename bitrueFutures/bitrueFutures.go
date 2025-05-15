@@ -34,13 +34,17 @@ type BitrueClient struct {
 }
 
 // WebSocketClient manages a WebSocket connection
+type WebSocketMessageHandler func(message []byte)
+
 type WebSocketClient struct {
 	conn        *websocket.Conn
 	url         string
 	messageChan chan []byte
 	done        chan struct{}
 	mutex       sync.Mutex
+	callback    WebSocketMessageHandler
 }
+
 
 // WebSocketMessage represents a WebSocket message structure
 type WebSocketMessage struct {
@@ -142,8 +146,15 @@ func newWebSocketClient(wsURL string) *WebSocketClient {
 		url:         wsURL,
 		messageChan: make(chan []byte, 100),
 		done:        make(chan struct{}),
+		callback:    nil,
 	}
 }
+
+// SetCallback sets a callback function for message handling
+func (w *WebSocketClient) SetCallback(cb WebSocketMessageHandler) {
+	w.callback = cb
+}
+
 
 // connect establishes a WebSocket connection
 func (w *WebSocketClient) connect() error {
@@ -220,11 +231,15 @@ func (w *WebSocketClient) readMessages(isMarket bool) {
 				}
 			}
 
-			// Send message to channel
-			select {
-			case w.messageChan <- message:
-			default:
-				fmt.Println("Message channel full, dropping message")
+			// Send message to callback if registered, else to channel
+			if w.callback != nil {
+				w.callback(message)
+			} else {
+				select {
+				case w.messageChan <- message:
+				default:
+					fmt.Println("Message channel full, dropping message")
+				}
 			}
 		}
 	}
@@ -303,6 +318,71 @@ func (c *BitrueClient) StopWebSocketUser() {
 		c.wsUserClient.close()
 		c.wsUserClient = nil
 	}
+}
+
+// SubscribeDepth subscribes to the depth websocket channel for a contract
+func (c *BitrueClient) SubscribeDepth(contractName string, callback WebSocketMessageHandler) error {
+	if c.wsMarketClient == nil || c.wsMarketClient.conn == nil {
+		return fmt.Errorf("WebSocket client not started")
+	}
+	c.wsMarketClient.SetCallback(callback)
+	channel := "market_$symbol_depth_step0"
+	channel = strings.Replace(channel, "$symbol", strings.ToLower(contractName), -1)
+	msg := WebSocketMessage{
+		Event: "sub",
+		Params: map[string]interface{}{
+			"channel": channel,
+			"cb_id":   "",
+		},
+	}
+	return c.wsMarketClient.conn.WriteJSON(msg)
+}
+
+// SubscribeKline subscribes to the kline websocket channel for a contract and interval
+func (c *BitrueClient) SubscribeKline(contractName, interval string, callback WebSocketMessageHandler) error {
+	if c.wsMarketClient == nil || c.wsMarketClient.conn == nil {
+		return fmt.Errorf("WebSocket client not started")
+	}
+	c.wsMarketClient.SetCallback(callback)
+	channel := "market_$symbol_kline_$interval"
+	channel = strings.Replace(channel, "$symbol", strings.ToLower(contractName), -1)
+	channel = strings.Replace(channel, "$interval", interval, -1)
+	msg := WebSocketMessage{
+		Event: "sub",
+		Params: map[string]interface{}{
+			"channel": channel,
+			"cb_id":   "",
+		},
+	}
+	return c.wsMarketClient.conn.WriteJSON(msg)
+}
+
+// SubscribeTrade subscribes to the trade websocket channel for a contract
+func (c *BitrueClient) SubscribeTrade(contractName string, callback WebSocketMessageHandler) error {
+	if c.wsMarketClient == nil || c.wsMarketClient.conn == nil {
+		return fmt.Errorf("WebSocket client not started")
+	}
+	c.wsMarketClient.SetCallback(callback)
+	channel := "market_$symbol_trade_ticker"
+	channel = strings.Replace(channel, "$symbol", strings.ToLower(contractName), -1)
+	msg := WebSocketMessage{
+		Event: "sub",
+		Params: map[string]interface{}{
+			"channel": channel,
+			"cb_id":   "",
+		},
+	}
+	return c.wsMarketClient.conn.WriteJSON(msg)
+}
+
+// SubscribeUserData subscribes to the user data websocket channel (requires listenKey)
+func (c *BitrueClient) SubscribeUserData(listenKey string, callback WebSocketMessageHandler) error {
+	if c.wsUserClient == nil || c.wsUserClient.conn == nil {
+		return fmt.Errorf("User WebSocket client not started")
+	}
+	c.wsUserClient.SetCallback(callback)
+	// Bitrue user data streams are established on connection, no extra sub needed
+	return nil
 }
 
 // SubscribeWebSocket subscribes to a WebSocket channel
@@ -467,13 +547,25 @@ func (c *BitrueClient) MyTrades(params struct {
 }
 
 // ModifyPositionMargin modifies isolated position margin
-func (c *BitrueClient) ModifyPositionMargin(contractName string, amount float64) ([]byte, error) {
+// API docs: POST /fapi/v2/positionMargin
+// Required fields: contractName, positionMargin
+func (c *BitrueClient) ModifyPositionMargin(contractName string, positionMargin float64) ([]byte, error) {
 	body := map[string]interface{}{
-		"contractName": contractName,
-		"amount":       amount,
+		"contractName":   contractName,
+		"positionMargin": positionMargin,
 	}
 	return c.doRequest(http.MethodPost, "/fapi/v2/positionMargin", nil, body, true)
 }
+
+// LeverageBracket retrieves notional and leverage brackets for a contract
+// API docs: GET /fapi/v2/leverageBracket
+// Required query param: contractName
+func (c *BitrueClient) LeverageBracket(contractName string) ([]byte, error) {
+	params := url.Values{}
+	params.Set("contractName", contractName)
+	return c.doRequest(http.MethodGet, "/fapi/v2/leverageBracket", params, nil, true)
+}
+
 
 // ChangeLeverage changes initial leverage
 func (c *BitrueClient) ChangeLeverage(contractName string, leverage int) ([]byte, error) {
@@ -593,12 +685,7 @@ func (c *BitrueClient) Account() ([]byte, error) {
 	return c.doRequest(http.MethodGet, "/fapi/v2/account", nil, nil, true)
 }
 
-// LeverageBracket retrieves leverage brackets
-func (c *BitrueClient) LeverageBracket(contractName string) ([]byte, error) {
-	params := url.Values{}
-	params.Set("contractName", contractName)
-	return c.doRequest(http.MethodGet, "/fapi/v2/leverageBracket", params, nil, true)
-}
+
 
 // CommissionRate retrieves commission rates
 func (c *BitrueClient) CommissionRate(contractName string) ([]byte, error) {

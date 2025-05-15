@@ -11,8 +11,8 @@ import (
 
 func main() {
 	// Load API key and secret from environment variables
-	apiKey := "5f1310fd1cbd2cf9736e1feef5f014f4569b37ff4110c26bf5c39026ddca71ad"
-	secretKey := "074fade678ae56177ceb40504c3faa9abd8d07250dda5c4e115f9b7f1389df56"
+	apiKey := os.Getenv("BITRUE_API_KEY")
+	secretKey := os.Getenv("BITRUE_SECRET_KEY")
 	if apiKey == "" || secretKey == "" {
 		fmt.Println("Please set BITRUE_API_KEY and BITRUE_SECRET_KEY environment variables")
 		os.Exit(1)
@@ -63,6 +63,24 @@ func main() {
 		fmt.Printf("Account response: %s\n", accountResp)
 	}
 
+	// Test LeverageBracket (new endpoint)
+	leverageBracketResp, err := client.LeverageBracket("E-BTC-USDT")
+	if err != nil {
+		fmt.Printf("LeverageBracket failed: %v\n", err)
+	} else {
+		fmt.Printf("LeverageBracket response: %s\n", leverageBracketResp)
+	}
+
+	// Test ModifyPositionMargin (new endpoint)
+	// WARNING: This may fail if you do not have an open position on the contract.
+	modMarginResp, err := client.ModifyPositionMargin("E-BTC-USDT", 10)
+	if err != nil {
+		fmt.Printf("ModifyPositionMargin failed (expected if no open position): %v\n", err)
+	} else {
+		fmt.Printf("ModifyPositionMargin response: %s\n", modMarginResp)
+	}
+
+
 	// Test WebSocket Endpoints
 	fmt.Println("\n=== Testing WebSocket Endpoints ===")
 
@@ -73,78 +91,47 @@ func main() {
 	}
 	defer client.StopWebSocketMarket()
 
-	// Subscribe to depth updates
-	if err := client.SubscribeWebSocket("market_$symbol_depth_step0", "e_btcusdt", "", true); err != nil {
+	// Subscribe to depth updates using new typed function
+	if err := client.SubscribeDepth("e_btcusdt", func(msg []byte) {
+		var wsMsg bitrueFutures.WebSocketMessage
+		if err := json.Unmarshal(msg, &wsMsg); err != nil {
+			fmt.Printf("[Depth] Failed to parse message: %v\n", err)
+			return
+		}
+		fmt.Printf("[Depth] Channel=%s, Status=%s, Tick=%v\n", wsMsg.Channel, wsMsg.Status, wsMsg.Tick)
+	}); err != nil {
 		fmt.Printf("Failed to subscribe to depth: %v\n", err)
 		os.Exit(1)
 	}
 
-	// Subscribe to 1-minute Kline data
-	if err := client.SubscribeWebSocket("market_$symbol_kline_$interval", "e_btcusdt", "1min", true); err != nil {
+	// Subscribe to 1-minute Kline data using new typed function
+	if err := client.SubscribeKline("e_btcusdt", "1min", func(msg []byte) {
+		var wsMsg bitrueFutures.WebSocketMessage
+		if err := json.Unmarshal(msg, &wsMsg); err != nil {
+			fmt.Printf("[Kline] Failed to parse message: %v\n", err)
+			return
+		}
+		fmt.Printf("[Kline] Channel=%s, Status=%s, Tick=%v\n", wsMsg.Channel, wsMsg.Status, wsMsg.Tick)
+	}); err != nil {
 		fmt.Printf("Failed to subscribe to kline: %v\n", err)
 		os.Exit(1)
 	}
 
-	// Request historical trade data
-	if err := client.RequestWebSocketData("market_$symbol_trade_ticker", "e_btcusdt", "", 10, "", true); err != nil {
-		fmt.Printf("Failed to request trade history: %v\n", err)
-		os.Exit(1)
-	}
-
-	// Handle market WebSocket messages
-	go func() {
-		for msg := range client.GetWebSocketMessages(true) {
-			var wsMsg bitrueFutures.WebSocketMessage
-			if err := json.Unmarshal(msg, &wsMsg); err != nil {
-				fmt.Printf("Failed to parse market WebSocket message: %v\n", err)
-				continue
-			}
-			fmt.Printf("Market WebSocket message: Channel=%s, Status=%s, Tick=%v\n", wsMsg.Channel, wsMsg.Status, wsMsg.Tick)
+	// Subscribe to trade ticker using new typed function
+	if err := client.SubscribeTrade("e_btcusdt", func(msg []byte) {
+		var wsMsg bitrueFutures.WebSocketMessage
+		if err := json.Unmarshal(msg, &wsMsg); err != nil {
+			fmt.Printf("[Trade] Failed to parse message: %v\n", err)
+			return
 		}
-	}()
-
-	// Test User WebSocket
-	listenKeyResp, err := client.CreateListenKey()
-	if err != nil {
-		fmt.Printf("Failed to create listenKey: %v\n", err)
-		os.Exit(1)
-	}
-	var listenKeyData struct {
-		Data struct {
-			ListenKey string `json:"listenKey"`
-		} `json:"data"`
-	}
-	if err := json.Unmarshal(listenKeyResp, &listenKeyData); err != nil {
-		fmt.Printf("Failed to parse listenKey: %v\n", err)
-		os.Exit(1)
-	}
-	listenKey := listenKeyData.Data.ListenKey
-
-	if err := client.StartWebSocketUser(listenKey); err != nil {
-		fmt.Printf("Failed to start user WebSocket: %v\n", err)
-		os.Exit(1)
-	}
-	defer client.StopWebSocketUser()
-
-	if err := client.SubscribeWebSocket("user_account_update", "", "", false); err != nil {
-		fmt.Printf("Failed to subscribe to user account updates: %v\n", err)
+		fmt.Printf("[Trade] Channel=%s, Status=%s, Tick=%v\n", wsMsg.Channel, wsMsg.Status, wsMsg.Tick)
+	}); err != nil {
+		fmt.Printf("Failed to subscribe to trade: %v\n", err)
 		os.Exit(1)
 	}
 
-	// Handle user WebSocket messages
-	go func() {
-		for msg := range client.GetWebSocketMessages(false) {
-			var wsMsg bitrueFutures.WebSocketMessage
-			if err := json.Unmarshal(msg, &wsMsg); err != nil {
-				fmt.Printf("Failed to parse user WebSocket message: %v\n", err)
-				continue
-			}
-			fmt.Printf("User WebSocket message: Event=%s, Data=%v\n", wsMsg.Event, wsMsg.Data)
-		}
-	}()
-
-	// Keep the program running for 30 seconds to collect messages
-	fmt.Println("Running for 30 seconds to collect WebSocket messages...")
+	// Keep the program running for 30 seconds to collect market WebSocket messages
+	fmt.Println("Running for 30 seconds to collect market WebSocket messages...")
 	time.Sleep(30 * time.Second)
 
 	// Unsubscribe from market WebSocket channels
