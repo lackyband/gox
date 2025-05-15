@@ -42,8 +42,6 @@ type WebSocketMessage struct {
 	Tick      interface{}            `json:"tick"`
 	Data      interface{}            `json:"data"`
 	EventRep  string                 `json:"event_rep"`
-	Ping      string                 `json:"ping"`
-	Pong      string                 `json:"pong"`
 }
 
 // NewWebSocketClient initializes a WebSocket client
@@ -126,9 +124,14 @@ func (w *WebSocketClient) ReadMessages(isMarket bool) {
 			// Handle ping/pong
 			var msg WebSocketMessage
 			if err := json.Unmarshal(message, &msg); err == nil {
-				if msg.Ping != "" {
-					pong := WebSocketMessage{Pong: msg.Ping}
-					w.conn.WriteJSON(pong)
+				if msg.Event == "ping" {
+					pong := WebSocketMessage{
+						Event:     "pong",
+						Timestamp: msg.Timestamp,
+					}
+					if err := w.conn.WriteJSON(pong); err != nil {
+						fmt.Printf("Failed to send pong: %v\n", err)
+					}
 					continue
 				}
 			}
@@ -182,7 +185,7 @@ type BitrueClient struct {
 // NewBitrueClient initializes a new BitrueClient
 func NewBitrueClient(apiKey, secretKey string) *BitrueClient {
 	return &BitrueClient{
-		baseURL:        "https://openapi.bitrue.com",
+		baseURL:        "https://open.bitrue.com",
 		wsMarketURL:    "wss://ws.bitrue.com/market/ws",
 		wsUserURL:      "wss://wsapi.bitrue.com",
 		apiKey:         apiKey,
@@ -358,82 +361,100 @@ func (c *BitrueClient) GetWebSocketMessages(isMarket bool) chan []byte {
 
 // DoRequest executes an HTTP request with headers and signature
 func (c *BitrueClient) doRequest(method, endpoint string, params url.Values, body url.Values, signed bool) ([]byte, error) {
-	u, err := url.Parse(c.baseURL + endpoint)
-	if err != nil {
-		return nil, fmt.Errorf("invalid URL: %v", err)
-	}
+	const maxRetries = 3
+	const retryDelay = 2 * time.Second
 
-	var totalParams string
-	var bodyBytes []byte
-	if body != nil {
-		bodyBytes = []byte(body.Encode())
-		totalParams = body.Encode()
-	}
-	if params != nil {
-		u.RawQuery = params.Encode()
-		if totalParams == "" {
-			totalParams = u.RawQuery
-		} else {
-			totalParams = u.RawQuery + "&" + totalParams
+	var respBody []byte
+	var lastErr error
+
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		u, err := url.Parse(c.baseURL + endpoint)
+		if err != nil {
+			return nil, fmt.Errorf("invalid URL: %v", err)
 		}
-	}
 
-	req, err := http.NewRequest(method, u.String(), bytes.NewReader(bodyBytes))
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %v", err)
-	}
-
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	if c.apiKey != "" {
-		req.Header.Set("X-MBX-APIKEY", c.apiKey)
-	}
-
-	if signed {
-		if params == nil {
-			params = url.Values{}
-		}
-		timestamp := time.Now().UnixMilli()
-		params.Set("timestamp", strconv.FormatInt(timestamp, 10))
-		signingString := params.Encode()
+		var totalParams string
+		var bodyBytes []byte
 		if body != nil {
-			signingString += "&" + body.Encode()
+			bodyBytes = []byte(body.Encode())
+			totalParams = body.Encode()
 		}
-		fmt.Printf("DEBUG SIGNING STRING: %s\n", signingString)
-		signature := c.GenerateSignature(signingString)
-		fmt.Printf("DEBUG SIGNATURE: %s\n", signature)
-		// DO NOT add signature to params for encoding
-		// Instead, append it manually to keep it last
-		signedQuery := params.Encode() + "&signature=" + signature
-		u.RawQuery = signedQuery
-		req.URL = u
+		if params != nil {
+			u.RawQuery = params.Encode()
+			if totalParams == "" {
+				totalParams = u.RawQuery
+			} else {
+				totalParams = u.RawQuery + "&" + totalParams
+			}
+		}
+
+		req, err := http.NewRequest(method, u.String(), bytes.NewReader(bodyBytes))
+		if err != nil {
+			return nil, fmt.Errorf("failed to create request: %v", err)
+		}
+
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		if c.apiKey != "" {
+			req.Header.Set("X-MBX-APIKEY", c.apiKey)
+		}
+
+		if signed {
+			if params == nil {
+				params = url.Values{}
+			}
+			timestamp := time.Now().UnixMilli()
+			params.Set("timestamp", strconv.FormatInt(timestamp, 10))
+			signingString := params.Encode()
+			if body != nil {
+				signingString += "&" + body.Encode()
+			}
+			fmt.Printf("DEBUG SIGNING STRING: %s\n", signingString)
+			signature := c.GenerateSignature(signingString)
+			fmt.Printf("DEBUG SIGNATURE: %s\n", signature)
+			signedQuery := params.Encode() + "&signature=" + signature
+			u.RawQuery = signedQuery
+			req.URL = u
+		}
+
+		fmt.Printf("\nDEBUG REQUEST URL: %s\n", req.URL.String())
+		fmt.Printf("DEBUG REQUEST HEADERS:\n")
+		for k, v := range req.Header {
+			fmt.Printf("  %s: %s\n", k, v)
+		}
+		if body != nil {
+			fmt.Printf("DEBUG REQUEST BODY: %s\n", body.Encode())
+		}
+
+		resp, err := c.httpClient.Do(req)
+		if err != nil {
+			lastErr = fmt.Errorf("request failed: %v", err)
+			time.Sleep(retryDelay)
+			continue
+		}
+		defer resp.Body.Close()
+
+		respBody, err = io.ReadAll(resp.Body)
+		if err != nil {
+			lastErr = fmt.Errorf("failed to read response: %v", err)
+			time.Sleep(retryDelay)
+			continue
+		}
+
+		if resp.StatusCode == http.StatusServiceUnavailable {
+			fmt.Printf("Attempt %d: 503 Service Unavailable, retrying in %v...\n", attempt, retryDelay)
+			time.Sleep(retryDelay)
+			lastErr = fmt.Errorf("unexpected status: %s, body: %s", resp.Status, string(respBody))
+			continue
+		}
+
+		if resp.StatusCode != http.StatusOK {
+			return nil, fmt.Errorf("unexpected status: %s, body: %s", resp.Status, string(respBody))
+		}
+
+		return respBody, nil
 	}
 
-	// DEBUG: Print request details for troubleshooting
-	fmt.Printf("\nDEBUG REQUEST URL: %s\n", req.URL.String())
-	fmt.Printf("DEBUG REQUEST HEADERS:\n")
-	for k, v := range req.Header {
-		fmt.Printf("  %s: %s\n", k, v)
-	}
-	if body != nil {
-		fmt.Printf("DEBUG REQUEST BODY: %s\n", body.Encode())
-	}
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("request failed: %v", err)
-	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read response: %v", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("unexpected status: %s, body: %s", resp.Status, string(respBody))
-	}
-
-	return respBody, nil
+	return nil, fmt.Errorf("failed after %d attempts: %v", maxRetries, lastErr)
 }
 
 // GenerateSignature creates an HMAC SHA256 signature
@@ -812,17 +833,19 @@ func (c *BitrueClient) DepositHistory(params struct {
 
 // CreateListenKey creates a new user data stream listenKey
 func (c *BitrueClient) CreateListenKey() ([]byte, error) {
-	return c.doRequest(http.MethodPost, "/poseidon/api/v1/listenKey", nil, nil, true)
+	return c.doRequest(http.MethodPost, "/api/v3/userDataStream", nil, nil, true)
 }
 
 // KeepAliveListenKey extends the validity of a listenKey
 func (c *BitrueClient) KeepAliveListenKey(listenKey string) ([]byte, error) {
-	endpoint := fmt.Sprintf("/poseidon/api/v1/listenKey/%s", listenKey)
-	return c.doRequest(http.MethodPut, endpoint, nil, nil, true)
+	params := url.Values{}
+	params.Set("listenKey", listenKey)
+	return c.doRequest(http.MethodPut, "/api/v3/userDataStream", params, nil, true)
 }
 
 // CloseListenKey closes a user data stream
 func (c *BitrueClient) CloseListenKey(listenKey string) ([]byte, error) {
-	endpoint := fmt.Sprintf("/poseidon/api/v1/listenKey/%s", listenKey)
-	return c.doRequest(http.MethodDelete, endpoint, nil, nil, true)
+	params := url.Values{}
+	params.Set("listenKey", listenKey)
+	return c.doRequest(http.MethodDelete, "/api/v3/userDataStream", params, nil, true)
 }

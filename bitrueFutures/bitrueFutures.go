@@ -60,7 +60,7 @@ func (w *WebSocketClient) SetCallback(cb WebSocketMessageHandler) {
 }
 
 // Connect establishes a WebSocket connection
-func (w *WebSocketClient) Connect() error {
+func (w *WebSocketClient) Connect(apiKey string) error {
 	w.mutex.Lock()
 	defer w.mutex.Unlock()
 
@@ -68,12 +68,25 @@ func (w *WebSocketClient) Connect() error {
 		return nil
 	}
 
-	conn, _, err := websocket.DefaultDialer.Dial(w.url, nil)
-	if err != nil {
-		return fmt.Errorf("failed to connect to WebSocket: %v", err)
+	const maxRetries = 3
+	const retryDelay = 2 * time.Second
+
+	headers := http.Header{}
+	if apiKey != "" {
+		headers.Set("X-CH-APIKEY", apiKey)
 	}
-	w.conn = conn
-	return nil
+
+	var err error
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		conn, _, err := websocket.DefaultDialer.Dial(w.url, headers)
+		if err == nil {
+			w.conn = conn
+			return nil
+		}
+		fmt.Printf("WebSocket connect attempt %d failed: %v, retrying in %v...\n", attempt, err, retryDelay)
+		time.Sleep(retryDelay)
+	}
+	return fmt.Errorf("failed to connect to WebSocket after %d attempts: %v", maxRetries, err)
 }
 
 // Close closes the WebSocket connection
@@ -153,7 +166,7 @@ func (w *WebSocketClient) Reconnect(isMarket bool) error {
 	attempts := 0
 	maxAttempts := 5
 	for attempts < maxAttempts {
-		if err := w.Connect(); err != nil {
+		if err := w.Connect(""); err != nil {
 			attempts++
 			backoff := time.Duration(1<<uint(attempts)) * time.Second
 			fmt.Printf("Reconnect attempt %d failed: %v, retrying in %v\n", attempts, err, backoff)
@@ -171,6 +184,7 @@ type BitrueClient struct {
 	baseURL        string
 	wsMarketURL    string
 	wsUserURL      string
+	userStreamURL  string // New field for user stream base URL
 	apiKey         string
 	secretKey      string
 	httpClient     *http.Client
@@ -184,6 +198,7 @@ type BitrueClient struct {
 func NewBitrueClient(apiKey, secretKey string) *BitrueClient {
 	return &BitrueClient{
 		baseURL:        "https://fapi.bitrue.com",
+		userStreamURL:  "https://fapiws-auth.bitrue.com", // Base URL for user stream endpoints
 		wsMarketURL:    "wss://fmarket-ws.bitrue.com/kline-api/ws",
 		wsUserURL:      "wss://fapiws.bitrue.com",
 		apiKey:         apiKey,
@@ -204,7 +219,7 @@ func (c *BitrueClient) StartWebSocketMarket() error {
 	}
 
 	c.wsMarketClient = NewWebSocketClient(c.wsMarketURL)
-	if err := c.wsMarketClient.Connect(); err != nil {
+	if err := c.wsMarketClient.Connect(c.apiKey); err != nil {
 		return err
 	}
 	go c.wsMarketClient.ReadMessages(true)
@@ -221,9 +236,10 @@ func (c *BitrueClient) StartWebSocketUser(listenKey string) error {
 	}
 
 	wsURL := fmt.Sprintf("%s/stream?listenKey=%s", c.wsUserURL, listenKey)
+	fmt.Printf("DEBUG: Connecting to user WebSocket URL: %s\n", wsURL)
 	c.wsUserClient = NewWebSocketClient(wsURL)
-	if err := c.wsUserClient.Connect(); err != nil {
-		return err
+	if err := c.wsUserClient.Connect(c.apiKey); err != nil {
+		return fmt.Errorf("failed to connect to WebSocket: %v", err)
 	}
 	go c.wsUserClient.ReadMessages(false)
 	return nil
@@ -408,68 +424,115 @@ func (c *BitrueClient) GetWebSocketMessages(isMarket bool) chan []byte {
 }
 
 // DoRequest executes an HTTP request with headers and signature
-func (c *BitrueClient) doRequest(method, endpoint string, params url.Values, body interface{}, signed bool) ([]byte, error) {
-	u, err := url.Parse(c.baseURL + endpoint)
-	if err != nil {
-		return nil, fmt.Errorf("invalid URL: %v", err)
-	}
+func (c *BitrueClient) DoRequest(method, baseURL, endpoint string, params url.Values, body interface{}, signed bool, useQuerySignature bool) ([]byte, error) {
+	const maxRetries = 3
+	const retryDelay = 2 * time.Second
 
-	var bodyBytes []byte
-	if body != nil {
-		bodyBytes, err = json.Marshal(body)
+	var respBody []byte
+	var lastErr error
+
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		u, err := url.Parse(baseURL + endpoint)
 		if err != nil {
-			return nil, fmt.Errorf("failed to marshal body: %v", err)
+			return nil, fmt.Errorf("invalid URL: %v", err)
 		}
-	}
 
-	if params != nil && method == http.MethodGet {
-		u.RawQuery = params.Encode()
-	}
-
-	req, err := http.NewRequest(method, u.String(), bytes.NewReader(bodyBytes))
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %v", err)
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	if c.apiKey != "" {
-		req.Header.Set("X-CH-APIKEY", c.apiKey)
-	}
-
-	if signed {
-		timestamp := time.Now().UnixMilli()
-		path := u.Path
-		if u.RawQuery != "" {
-			path += "?" + u.RawQuery
+		var bodyBytes []byte
+		if body != nil {
+			bodyBytes, err = json.Marshal(body)
+			if err != nil {
+				return nil, fmt.Errorf("failed to marshal body: %v", err)
+			}
 		}
-		signature := c.GenerateSignature(timestamp, strings.ToUpper(method), path, string(bodyBytes))
-		req.Header.Set("X-CH-SIGN", signature)
-		req.Header.Set("X-CH-TS", strconv.FormatInt(timestamp, 10))
+
+		if params != nil && method == http.MethodGet {
+			u.RawQuery = params.Encode()
+		}
+
+		req, err := http.NewRequest(method, u.String(), bytes.NewReader(bodyBytes))
+		if err != nil {
+			return nil, fmt.Errorf("failed to create request: %v", err)
+		}
+
+		req.Header.Set("Content-Type", "application/json")
+		if c.apiKey != "" {
+			req.Header.Set("X-CH-APIKEY", c.apiKey)
+		}
+
+		if signed {
+			timestamp := time.Now().UnixMilli()
+			if useQuerySignature {
+				// Signature in query string
+				if params == nil {
+					params = url.Values{}
+				}
+				params.Set("timestamp", strconv.FormatInt(timestamp, 10))
+				signingString := params.Encode()
+				if bodyBytes != nil {
+					signingString += "&" + string(bodyBytes)
+				}
+				signature := c.GenerateSignature(signingString)
+				params.Set("signature", signature)
+				u.RawQuery = params.Encode()
+				req.URL = u
+			} else {
+				// Signature in headers
+				path := u.Path
+				if u.RawQuery != "" {
+					path += "?" + u.RawQuery
+				}
+				signingString := fmt.Sprintf("%d%s%s%s", timestamp, strings.ToUpper(method), path, string(bodyBytes))
+				signature := c.GenerateSignature(signingString)
+				req.Header.Set("X-CH-SIGN", signature)
+				req.Header.Set("X-CH-TS", strconv.FormatInt(timestamp, 10))
+			}
+		}
+
+		fmt.Printf("FUTURES DEBUG: REQUEST URL: %s\n", req.URL.String())
+		fmt.Printf("FUTURES DEBUG: REQUEST HEADERS:\n")
+		for k, v := range req.Header {
+			fmt.Printf("  %s: %s\n", k, v)
+		}
+		if bodyBytes != nil {
+			fmt.Printf("FUTURES DEBUG: REQUEST BODY: %s\n", string(bodyBytes))
+		}
+
+		resp, err := c.httpClient.Do(req)
+		if err != nil {
+			lastErr = fmt.Errorf("request failed: %v", err)
+			time.Sleep(retryDelay)
+			continue
+		}
+		defer resp.Body.Close()
+
+		respBody, err = io.ReadAll(resp.Body)
+		if err != nil {
+			lastErr = fmt.Errorf("failed to read response: %v", err)
+			time.Sleep(retryDelay)
+			continue
+		}
+
+		if resp.StatusCode == http.StatusServiceUnavailable {
+			fmt.Printf("Attempt %d: 503 Service Unavailable, retrying in %v...\n", attempt, retryDelay)
+			time.Sleep(retryDelay)
+			lastErr = fmt.Errorf("unexpected status: %s, body: %s", resp.Status, string(respBody))
+			continue
+		}
+
+		if resp.StatusCode != http.StatusOK {
+			return respBody, fmt.Errorf("unexpected status: %s, body: %s", resp.Status, string(respBody))
+		}
+
+		return respBody, nil
 	}
 
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("request failed: %v", err)
-	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read response: %v", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("unexpected status: %s, body: %s", resp.Status, string(respBody))
-	}
-
-	return respBody, nil
+	return nil, fmt.Errorf("failed after %d attempts: %v", maxRetries, lastErr)
 }
 
 // GenerateSignature creates an HMAC SHA256 signature
-func (c *BitrueClient) GenerateSignature(timestamp int64, method, path, body string) string {
-	message := fmt.Sprintf("%d%s%s%s", timestamp, method, path, body)
+func (c *BitrueClient) GenerateSignature(signingString string) string {
 	mac := hmac.New(sha256.New, []byte(c.secretKey))
-	mac.Write([]byte(message))
+	mac.Write([]byte(signingString))
 	return hex.EncodeToString(mac.Sum(nil))
 }
 
@@ -477,17 +540,17 @@ func (c *BitrueClient) GenerateSignature(timestamp int64, method, path, body str
 
 // Ping tests connectivity to the API
 func (c *BitrueClient) Ping() ([]byte, error) {
-	return c.doRequest(http.MethodGet, "/fapi/v1/ping", nil, nil, false)
+	return c.DoRequest(http.MethodGet, c.baseURL, "/fapi/v1/ping", nil, nil, false, false)
 }
 
 // ServerTime retrieves the server time
 func (c *BitrueClient) ServerTime() ([]byte, error) {
-	return c.doRequest(http.MethodGet, "/fapi/v1/time", nil, nil, false)
+	return c.DoRequest(http.MethodGet, c.baseURL, "/fapi/v1/time", nil, nil, false, false)
 }
 
 // Contracts retrieves current open contracts
 func (c *BitrueClient) Contracts() ([]byte, error) {
-	return c.doRequest(http.MethodGet, "/fapi/v1/contracts", nil, nil, false)
+	return c.DoRequest(http.MethodGet, c.baseURL, "/fapi/v1/contracts", nil, nil, false, false)
 }
 
 // Depth retrieves the order book
@@ -497,14 +560,14 @@ func (c *BitrueClient) Depth(contractName string, limit int) ([]byte, error) {
 	if limit > 0 {
 		params.Set("limit", strconv.Itoa(limit))
 	}
-	return c.doRequest(http.MethodGet, "/fapi/v1/depth", params, nil, false)
+	return c.DoRequest(http.MethodGet, c.baseURL, "/fapi/v1/depth", params, nil, false, false)
 }
 
 // Ticker retrieves 24-hour price statistics
 func (c *BitrueClient) Ticker(contractName string) ([]byte, error) {
 	params := url.Values{}
 	params.Set("contractName", contractName)
-	return c.doRequest(http.MethodGet, "/fapi/v1/ticker", params, nil, false)
+	return c.DoRequest(http.MethodGet, c.baseURL, "/fapi/v1/ticker", params, nil, false, false)
 }
 
 // Klines retrieves Kline/Candlestick data
@@ -515,7 +578,7 @@ func (c *BitrueClient) Klines(contractName, interval string, limit int) ([]byte,
 	if limit > 0 {
 		params.Set("limit", strconv.Itoa(limit))
 	}
-	return c.doRequest(http.MethodGet, "/fapi/v1/klines", params, nil, false)
+	return c.DoRequest(http.MethodGet, c.baseURL, "/fapi/v1/klines", params, nil, false, false)
 }
 
 // MyTrades retrieves trade history
@@ -540,16 +603,23 @@ func (c *BitrueClient) MyTrades(params struct {
 	if params.EndTime > 0 {
 		query.Set("endTime", strconv.FormatInt(params.EndTime, 10))
 	}
-	return c.doRequest(http.MethodGet, "/fapi/v2/myTrades", query, nil, true)
+	return c.DoRequest(http.MethodGet, c.baseURL, "/fapi/v2/myTrades", query, nil, true, false)
 }
 
 // ModifyPositionMargin modifies isolated position margin
-func (c *BitrueClient) ModifyPositionMargin(contractName string, positionMargin float64) ([]byte, error) {
+func (c *BitrueClient) ModifyPositionMargin(params struct {
+	ContractName   string
+	PositionMargin float64
+	Type           int
+}) ([]byte, error) {
 	body := map[string]interface{}{
-		"contractName":   contractName,
-		"positionMargin": positionMargin,
+		"contractName":   params.ContractName,
+		"positionMargin": params.PositionMargin,
 	}
-	return c.doRequest(http.MethodPost, "/fapi/v2/positionMargin", nil, body, true)
+	if params.Type > 0 {
+		body["type"] = params.Type
+	}
+	return c.DoRequest(http.MethodPost, c.baseURL, "/fapi/v2/positionMargin", nil, body, true, false)
 }
 
 // ChangeLeverage changes initial leverage
@@ -558,14 +628,14 @@ func (c *BitrueClient) ChangeLeverage(contractName string, leverage int) ([]byte
 		"contractName": contractName,
 		"leverage":     leverage,
 	}
-	return c.doRequest(http.MethodPost, "/fapi/v2/level_edit", nil, body, true)
+	return c.DoRequest(http.MethodPost, c.baseURL, "/fapi/v2/level_edit", nil, body, true, false)
 }
 
 // OpenOrders retrieves all open orders
 func (c *BitrueClient) OpenOrders(contractName string) ([]byte, error) {
 	params := url.Values{}
 	params.Set("contractName", contractName)
-	return c.doRequest(http.MethodGet, "/fapi/v2/openOrders", params, nil, true)
+	return c.DoRequest(http.MethodGet, c.baseURL, "/fapi/v2/openOrders", params, nil, true, false)
 }
 
 // CancelOrder cancels an order
@@ -585,7 +655,7 @@ func (c *BitrueClient) CancelOrder(params struct {
 	if params.OrderID > 0 {
 		body["orderId"] = params.OrderID
 	}
-	return c.doRequest(http.MethodPost, "/fapi/v2/cancel", nil, body, true)
+	return c.DoRequest(http.MethodPost, c.baseURL, "/fapi/v2/cancel", nil, body, true, false)
 }
 
 // QueryOrder queries an order
@@ -606,7 +676,7 @@ func (c *BitrueClient) QueryOrder(params struct {
 	if params.ConditionOrder {
 		query.Set("conditionOrder", "true")
 	}
-	return c.doRequest(http.MethodGet, "/fapi/v2/order", query, nil, true)
+	return c.DoRequest(http.MethodGet, c.baseURL, "/fapi/v2/order", query, nil, true, false)
 }
 
 // NewOrder places a new order
@@ -662,26 +732,26 @@ func (c *BitrueClient) NewOrder(params struct {
 	if len(params.TriggerOrderParams) > 0 {
 		body["triggerOrderCreateParams"] = params.TriggerOrderParams
 	}
-	return c.doRequest(http.MethodPost, "/fapi/v2/order", nil, body, true)
+	return c.DoRequest(http.MethodPost, c.baseURL, "/fapi/v2/order", nil, body, true, false)
 }
 
 // Account retrieves account information
 func (c *BitrueClient) Account() ([]byte, error) {
-	return c.doRequest(http.MethodGet, "/fapi/v2/account", nil, nil, true)
+	return c.DoRequest(http.MethodGet, c.baseURL, "/fapi/v2/account", nil, nil, true, false)
 }
 
 // LeverageBracket retrieves leverage brackets
 func (c *BitrueClient) LeverageBracket(contractName string) ([]byte, error) {
 	params := url.Values{}
 	params.Set("contractName", contractName)
-	return c.doRequest(http.MethodGet, "/fapi/v2/leverageBracket", params, nil, true)
+	return c.DoRequest(http.MethodGet, c.baseURL, "/fapi/v2/leverageBracket", params, nil, true, false)
 }
 
 // CommissionRate retrieves commission rates
 func (c *BitrueClient) CommissionRate(contractName string) ([]byte, error) {
 	params := url.Values{}
 	params.Set("contractName", contractName)
-	return c.doRequest(http.MethodGet, "/fapi/v2/commissionRate", params, nil, true)
+	return c.DoRequest(http.MethodGet, c.baseURL, "/fapi/v2/commissionRate", params, nil, true, false)
 }
 
 // FuturesTransfer transfers funds between wallet and futures account
@@ -694,7 +764,7 @@ func (c *BitrueClient) FuturesTransfer(coinSymbol string, amount float64, transf
 	if unionID != "" {
 		body["unionId"] = unionID
 	}
-	return c.doRequest(http.MethodPost, "/fapi/v2/futures_transfer", nil, body, true)
+	return c.DoRequest(http.MethodPost, c.baseURL, "/fapi/v2/futures_transfer", nil, body, true, false)
 }
 
 // FuturesTransferHistory retrieves transfer history
@@ -723,7 +793,7 @@ func (c *BitrueClient) FuturesTransferHistory(params struct {
 	if params.Limit > 0 {
 		query.Set("limit", strconv.Itoa(params.Limit))
 	}
-	return c.doRequest(http.MethodGet, "/fapi/v2/futures_transfer_history", query, nil, true)
+	return c.DoRequest(http.MethodGet, c.baseURL, "/fapi/v2/futures_transfer_history", query, nil, true, false)
 }
 
 // ForceOrdersHistory retrieves forced liquidation order history
@@ -752,24 +822,24 @@ func (c *BitrueClient) ForceOrdersHistory(params struct {
 	if params.Limit > 0 {
 		query.Set("limit", strconv.Itoa(params.Limit))
 	}
-	return c.doRequest(http.MethodGet, "/fapi/v2/forceOrdersHistory", query, nil, true)
+	return c.DoRequest(http.MethodGet, c.baseURL, "/fapi/v2/forceOrdersHistory", query, nil, true, false)
 }
 
 // User Stream Endpoints
 
 // CreateListenKey creates a new user data stream listenKey
 func (c *BitrueClient) CreateListenKey() ([]byte, error) {
-	return c.doRequest(http.MethodPost, "/user_stream/api/v1/listenKey", nil, nil, true)
+	return c.DoRequest(http.MethodPost, c.userStreamURL, "/user_stream/api/v1/listenKey", nil, nil, true, false)
 }
 
 // KeepAliveListenKey extends the validity of a listenKey
 func (c *BitrueClient) KeepAliveListenKey(listenKey string) ([]byte, error) {
 	endpoint := fmt.Sprintf("/user_stream/api/v1/listenKey/%s", listenKey)
-	return c.doRequest(http.MethodPut, endpoint, nil, nil, true)
+	return c.DoRequest(http.MethodPut, c.userStreamURL, endpoint, nil, nil, true, false)
 }
 
 // CloseListenKey closes a user data stream
 func (c *BitrueClient) CloseListenKey(listenKey string) ([]byte, error) {
 	endpoint := fmt.Sprintf("/user_stream/api/v1/listenKey/%s", listenKey)
-	return c.doRequest(http.MethodDelete, endpoint, nil, nil, true)
+	return c.DoRequest(http.MethodDelete, c.userStreamURL, endpoint, nil, nil, true, false)
 }
