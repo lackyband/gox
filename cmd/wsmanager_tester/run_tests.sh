@@ -42,13 +42,32 @@ run_test() {
     local test_name=$1
     local output_file=$2
     
+    echo -e "${YELLOW}=== RUN   $test_name${NC}"
     echo "Running $test_name..." > "$output_file"
     
-    # Run test with timeout
+    # Create a named pipe for real-time output
+    local pipe="${output_file}.pipe"
+    mkfifo "$pipe"
+    
+    # Run test with timeout, tee output to both console and file
     set +e
-    timeout --kill-after=30s "$TEST_TIMEOUT" go test -v -run "^${test_name}\$" "${TEST_PACKAGES[@]}" >> "$output_file" 2>&1
+    (
+        timeout --kill-after=30s "$TEST_TIMEOUT" go test -v -run "^${test_name}\\$" "${TEST_PACKAGES[@]}" 2>&1 | \
+        tee -a "$output_file" "$pipe" & 
+    ) & local test_pid=$!
+    
+    # Display output in real-time
+    cat "$pipe" | while IFS= read -r line; do
+        echo "    $line"
+    done
+    
+    # Wait for the test to complete and get the result
+    wait $test_pid
     local result=$?
     set -e
+    
+    # Clean up
+    rm -f "$pipe"
     
     if [ $result -eq 0 ]; then
         echo -e "${GREEN}✅ PASSED: $test_name${NC}"
@@ -66,36 +85,22 @@ run_test() {
 TEMP_DIR=$(mktemp -d)
 trap 'rm -rf "$TEMP_DIR"' EXIT
 
-# Run tests in parallel
-echo -e "\n${YELLOW}=== Running Tests (max $MAX_PARALLEL in parallel) ===${NC}\n"
+# Run tests sequentially
+echo -e "\n${YELLOW}=== Running Tests Sequentially ===${NC}\n"
 
-PIDS=()
-RESULTS=()
 FAILED_TESTS=()
 PASSED_TESTS=()
 
 for test in "${TESTS[@]}"; do
-    # Wait if we've reached max parallel
-    while [ $(jobs -p | wc -l) -ge $MAX_PARALLEL ]; do
-        sleep 0.1
-    done
-    
-    # Run test in background
     output_file="${TEMP_DIR}/${test//[^[:alnum:]]/_}.log"
-    run_test "$test" "$output_file" & 
-    PIDS+=($!)
-    RESULTS+=("$output_file")
     
-    # Store test name and result
-    if [ $? -eq 0 ]; then
+    # Run test and capture exit status
+    if run_test "$test" "$output_file"; then
         PASSED_TESTS+=("$test")
     else
         FAILED_TESTS+=("$test")
     fi
 done
-
-# Wait for all tests to complete
-wait "${PIDS[@]}" 2>/dev/null || true
 
 # Print summary
 echo -e "\n${YELLOW}=== Test Summary ===${NC}"
