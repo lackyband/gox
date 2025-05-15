@@ -19,23 +19,10 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-// BitrueClient represents a client for the Bitrue Futures API (REST and WebSocket)
-type BitrueClient struct {
-	baseURL        string
-	wsMarketURL    string
-	wsUserURL      string
-	apiKey         string
-	secretKey      string
-	httpClient     *http.Client
-	wsMarketClient *WebSocketClient
-	wsUserClient   *WebSocketClient
-	wsMarketMutex  sync.Mutex
-	wsUserMutex    sync.Mutex
-}
-
-// WebSocketClient manages a WebSocket connection
+// WebSocketMessageHandler defines a callback for WebSocket messages
 type WebSocketMessageHandler func(message []byte)
 
+// WebSocketClient manages a WebSocket connection
 type WebSocketClient struct {
 	conn        *websocket.Conn
 	url         string
@@ -44,7 +31,6 @@ type WebSocketClient struct {
 	mutex       sync.Mutex
 	callback    WebSocketMessageHandler
 }
-
 
 // WebSocketMessage represents a WebSocket message structure
 type WebSocketMessage struct {
@@ -58,90 +44,8 @@ type WebSocketMessage struct {
 	EventRep  string                 `json:"event_rep"`
 }
 
-// NewBitrueClient initializes a new BitrueClient
-func NewBitrueClient(apiKey, secretKey string) *BitrueClient {
-	return &BitrueClient{
-		baseURL:        "https://fapi.bitrue.com",
-		wsMarketURL:    "wss://fmarket-ws.bitrue.com/kline-api/ws",
-		wsUserURL:      "wss://fapiws.bitrue.com",
-		apiKey:         apiKey,
-		secretKey:      secretKey,
-		httpClient:     &http.Client{Timeout: 10 * time.Second},
-		wsMarketClient: nil,
-		wsUserClient:   nil,
-	}
-}
-
-// generateSignature creates an HMAC SHA256 signature
-func (c *BitrueClient) generateSignature(timestamp int64, method, path, body string) string {
-	message := fmt.Sprintf("%d%s%s%s", timestamp, method, path, body)
-	mac := hmac.New(sha256.New, []byte(c.secretKey))
-	mac.Write([]byte(message))
-	return hex.EncodeToString(mac.Sum(nil))
-}
-
-// doRequest executes an HTTP request with headers and signature (if needed)
-func (c *BitrueClient) doRequest(method, endpoint string, params url.Values, body interface{}, signed bool) ([]byte, error) {
-	u, err := url.Parse(c.baseURL + endpoint)
-	if err != nil {
-		return nil, fmt.Errorf("invalid URL: %v", err)
-	}
-
-	var bodyBytes []byte
-	if body != nil {
-		bodyBytes, err = json.Marshal(body)
-		if err != nil {
-			return nil, fmt.Errorf("failed to marshal body: %v", err)
-		}
-	}
-
-	if params != nil && method == http.MethodGet {
-		u.RawQuery = params.Encode()
-	}
-
-	req, err := http.NewRequest(method, u.String(), bytes.NewReader(bodyBytes))
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %v", err)
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	if c.apiKey != "" {
-		req.Header.Set("X-CH-APIKEY", c.apiKey)
-	}
-
-	if signed {
-		timestamp := time.Now().UnixMilli()
-		path := u.Path
-		if u.RawQuery != "" {
-			path += "?" + u.RawQuery
-		}
-		signature := c.generateSignature(timestamp, strings.ToUpper(method), path, string(bodyBytes))
-		req.Header.Set("X-CH-SIGN", signature)
-		req.Header.Set("X-CH-TS", strconv.FormatInt(timestamp, 10))
-	}
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("request failed: %v", err)
-	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read response: %v", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("unexpected status: %s, body: %s", resp.Status, string(respBody))
-	}
-
-	return respBody, nil
-}
-
-// WebSocket Methods
-
-// newWebSocketClient initializes a WebSocket client
-func newWebSocketClient(wsURL string) *WebSocketClient {
+// NewWebSocketClient initializes a WebSocket client
+func NewWebSocketClient(wsURL string) *WebSocketClient {
 	return &WebSocketClient{
 		url:         wsURL,
 		messageChan: make(chan []byte, 100),
@@ -155,9 +59,8 @@ func (w *WebSocketClient) SetCallback(cb WebSocketMessageHandler) {
 	w.callback = cb
 }
 
-
-// connect establishes a WebSocket connection
-func (w *WebSocketClient) connect() error {
+// Connect establishes a WebSocket connection
+func (w *WebSocketClient) Connect() error {
 	w.mutex.Lock()
 	defer w.mutex.Unlock()
 
@@ -173,8 +76,8 @@ func (w *WebSocketClient) connect() error {
 	return nil
 }
 
-// close closes the WebSocket connection
-func (w *WebSocketClient) close() {
+// Close closes the WebSocket connection
+func (w *WebSocketClient) Close() {
 	w.mutex.Lock()
 	defer w.mutex.Unlock()
 
@@ -185,8 +88,8 @@ func (w *WebSocketClient) close() {
 	close(w.done)
 }
 
-// readMessages handles incoming WebSocket messages
-func (w *WebSocketClient) readMessages(isMarket bool) {
+// ReadMessages handles incoming WebSocket messages
+func (w *WebSocketClient) ReadMessages(isMarket bool) {
 	for {
 		select {
 		case <-w.done:
@@ -198,7 +101,7 @@ func (w *WebSocketClient) readMessages(isMarket bool) {
 			_, message, err := w.conn.ReadMessage()
 			if err != nil {
 				fmt.Printf("WebSocket read error: %v\n", err)
-				w.close()
+				w.Close()
 				return
 			}
 
@@ -245,22 +148,50 @@ func (w *WebSocketClient) readMessages(isMarket bool) {
 	}
 }
 
-// reconnect attempts to reconnect with exponential backoff
-func (w *WebSocketClient) reconnect() error {
+// Reconnect attempts to reconnect with exponential backoff
+func (w *WebSocketClient) Reconnect(isMarket bool) error {
 	attempts := 0
 	maxAttempts := 5
 	for attempts < maxAttempts {
-		if err := w.connect(); err != nil {
+		if err := w.Connect(); err != nil {
 			attempts++
 			backoff := time.Duration(1<<uint(attempts)) * time.Second
 			fmt.Printf("Reconnect attempt %d failed: %v, retrying in %v\n", attempts, err, backoff)
 			time.Sleep(backoff)
 			continue
 		}
-		go w.readMessages(w.url == "wss://fmarket-ws.bitrue.com/kline-api/ws")
+		go w.ReadMessages(isMarket)
 		return nil
 	}
 	return fmt.Errorf("failed to reconnect after %d attempts", maxAttempts)
+}
+
+// BitrueClient represents a client for the Bitrue Futures API
+type BitrueClient struct {
+	baseURL        string
+	wsMarketURL    string
+	wsUserURL      string
+	apiKey         string
+	secretKey      string
+	httpClient     *http.Client
+	wsMarketClient *WebSocketClient
+	wsUserClient   *WebSocketClient
+	wsMarketMutex  sync.Mutex
+	wsUserMutex    sync.Mutex
+}
+
+// NewBitrueClient initializes a new BitrueClient
+func NewBitrueClient(apiKey, secretKey string) *BitrueClient {
+	return &BitrueClient{
+		baseURL:        "https://fapi.bitrue.com",
+		wsMarketURL:    "wss://fmarket-ws.bitrue.com/kline-api/ws",
+		wsUserURL:      "wss://fapiws.bitrue.com",
+		apiKey:         apiKey,
+		secretKey:      secretKey,
+		httpClient:     &http.Client{Timeout: 10 * time.Second},
+		wsMarketClient: nil,
+		wsUserClient:   nil,
+	}
 }
 
 // StartWebSocketMarket starts the market data WebSocket client
@@ -272,11 +203,11 @@ func (c *BitrueClient) StartWebSocketMarket() error {
 		return nil
 	}
 
-	c.wsMarketClient = newWebSocketClient(c.wsMarketURL)
-	if err := c.wsMarketClient.connect(); err != nil {
+	c.wsMarketClient = NewWebSocketClient(c.wsMarketURL)
+	if err := c.wsMarketClient.Connect(); err != nil {
 		return err
 	}
-	go c.wsMarketClient.readMessages(true)
+	go c.wsMarketClient.ReadMessages(true)
 	return nil
 }
 
@@ -290,11 +221,11 @@ func (c *BitrueClient) StartWebSocketUser(listenKey string) error {
 	}
 
 	wsURL := fmt.Sprintf("%s/stream?listenKey=%s", c.wsUserURL, listenKey)
-	c.wsUserClient = newWebSocketClient(wsURL)
-	if err := c.wsUserClient.connect(); err != nil {
+	c.wsUserClient = NewWebSocketClient(wsURL)
+	if err := c.wsUserClient.Connect(); err != nil {
 		return err
 	}
-	go c.wsUserClient.readMessages(false)
+	go c.wsUserClient.ReadMessages(false)
 	return nil
 }
 
@@ -304,7 +235,7 @@ func (c *BitrueClient) StopWebSocketMarket() {
 	defer c.wsMarketMutex.Unlock()
 
 	if c.wsMarketClient != nil {
-		c.wsMarketClient.close()
+		c.wsMarketClient.Close()
 		c.wsMarketClient = nil
 	}
 }
@@ -315,12 +246,12 @@ func (c *BitrueClient) StopWebSocketUser() {
 	defer c.wsUserMutex.Unlock()
 
 	if c.wsUserClient != nil {
-		c.wsUserClient.close()
+		c.wsUserClient.Close()
 		c.wsUserClient = nil
 	}
 }
 
-// SubscribeDepth subscribes to the depth websocket channel for a contract
+// SubscribeDepth subscribes to the depth websocket channel
 func (c *BitrueClient) SubscribeDepth(contractName string, callback WebSocketMessageHandler) error {
 	if c.wsMarketClient == nil || c.wsMarketClient.conn == nil {
 		return fmt.Errorf("WebSocket client not started")
@@ -338,7 +269,7 @@ func (c *BitrueClient) SubscribeDepth(contractName string, callback WebSocketMes
 	return c.wsMarketClient.conn.WriteJSON(msg)
 }
 
-// SubscribeKline subscribes to the kline websocket channel for a contract and interval
+// SubscribeKline subscribes to the kline websocket channel
 func (c *BitrueClient) SubscribeKline(contractName, interval string, callback WebSocketMessageHandler) error {
 	if c.wsMarketClient == nil || c.wsMarketClient.conn == nil {
 		return fmt.Errorf("WebSocket client not started")
@@ -357,7 +288,7 @@ func (c *BitrueClient) SubscribeKline(contractName, interval string, callback We
 	return c.wsMarketClient.conn.WriteJSON(msg)
 }
 
-// SubscribeTrade subscribes to the trade websocket channel for a contract
+// SubscribeTrade subscribes to the trade websocket channel
 func (c *BitrueClient) SubscribeTrade(contractName string, callback WebSocketMessageHandler) error {
 	if c.wsMarketClient == nil || c.wsMarketClient.conn == nil {
 		return fmt.Errorf("WebSocket client not started")
@@ -375,13 +306,13 @@ func (c *BitrueClient) SubscribeTrade(contractName string, callback WebSocketMes
 	return c.wsMarketClient.conn.WriteJSON(msg)
 }
 
-// SubscribeUserData subscribes to the user data websocket channel (requires listenKey)
+// SubscribeUserData subscribes to the user data websocket channel
 func (c *BitrueClient) SubscribeUserData(listenKey string, callback WebSocketMessageHandler) error {
 	if c.wsUserClient == nil || c.wsUserClient.conn == nil {
 		return fmt.Errorf("User WebSocket client not started")
 	}
 	c.wsUserClient.SetCallback(callback)
-	// Bitrue user data streams are established on connection, no extra sub needed
+	// Futures user data streams are established on connection
 	return nil
 }
 
@@ -476,6 +407,72 @@ func (c *BitrueClient) GetWebSocketMessages(isMarket bool) chan []byte {
 	return c.wsUserClient.messageChan
 }
 
+// DoRequest executes an HTTP request with headers and signature
+func (c *BitrueClient) doRequest(method, endpoint string, params url.Values, body interface{}, signed bool) ([]byte, error) {
+	u, err := url.Parse(c.baseURL + endpoint)
+	if err != nil {
+		return nil, fmt.Errorf("invalid URL: %v", err)
+	}
+
+	var bodyBytes []byte
+	if body != nil {
+		bodyBytes, err = json.Marshal(body)
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal body: %v", err)
+		}
+	}
+
+	if params != nil && method == http.MethodGet {
+		u.RawQuery = params.Encode()
+	}
+
+	req, err := http.NewRequest(method, u.String(), bytes.NewReader(bodyBytes))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %v", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	if c.apiKey != "" {
+		req.Header.Set("X-CH-APIKEY", c.apiKey)
+	}
+
+	if signed {
+		timestamp := time.Now().UnixMilli()
+		path := u.Path
+		if u.RawQuery != "" {
+			path += "?" + u.RawQuery
+		}
+		signature := c.generateSignature(timestamp, strings.ToUpper(method), path, string(bodyBytes))
+		req.Header.Set("X-CH-SIGN", signature)
+		req.Header.Set("X-CH-TS", strconv.FormatInt(timestamp, 10))
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %v", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("unexpected status: %s, body: %s", resp.Status, string(respBody))
+	}
+
+	return respBody, nil
+}
+
+// GenerateSignature creates an HMAC SHA256 signature
+func (c *BitrueClient) generateSignature(timestamp int64, method, path, body string) string {
+	message := fmt.Sprintf("%d%s%s%s", timestamp, method, path, body)
+	mac := hmac.New(sha256.New, []byte(c.secretKey))
+	mac.Write([]byte(message))
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
 // REST API Endpoints
 
 // Ping tests connectivity to the API
@@ -547,8 +544,6 @@ func (c *BitrueClient) MyTrades(params struct {
 }
 
 // ModifyPositionMargin modifies isolated position margin
-// API docs: POST /fapi/v2/positionMargin
-// Required fields: contractName, positionMargin
 func (c *BitrueClient) ModifyPositionMargin(contractName string, positionMargin float64) ([]byte, error) {
 	body := map[string]interface{}{
 		"contractName":   contractName,
@@ -556,16 +551,6 @@ func (c *BitrueClient) ModifyPositionMargin(contractName string, positionMargin 
 	}
 	return c.doRequest(http.MethodPost, "/fapi/v2/positionMargin", nil, body, true)
 }
-
-// LeverageBracket retrieves notional and leverage brackets for a contract
-// API docs: GET /fapi/v2/leverageBracket
-// Required query param: contractName
-func (c *BitrueClient) LeverageBracket(contractName string) ([]byte, error) {
-	params := url.Values{}
-	params.Set("contractName", contractName)
-	return c.doRequest(http.MethodGet, "/fapi/v2/leverageBracket", params, nil, true)
-}
-
 
 // ChangeLeverage changes initial leverage
 func (c *BitrueClient) ChangeLeverage(contractName string, leverage int) ([]byte, error) {
@@ -685,7 +670,12 @@ func (c *BitrueClient) Account() ([]byte, error) {
 	return c.doRequest(http.MethodGet, "/fapi/v2/account", nil, nil, true)
 }
 
-
+// LeverageBracket retrieves leverage brackets
+func (c *BitrueClient) LeverageBracket(contractName string) ([]byte, error) {
+	params := url.Values{}
+	params.Set("contractName", contractName)
+	return c.doRequest(http.MethodGet, "/fapi/v2/leverageBracket", params, nil, true)
+}
 
 // CommissionRate retrieves commission rates
 func (c *BitrueClient) CommissionRate(contractName string) ([]byte, error) {
@@ -738,23 +728,23 @@ func (c *BitrueClient) FuturesTransferHistory(params struct {
 
 // ForceOrdersHistory retrieves forced liquidation order history
 func (c *BitrueClient) ForceOrdersHistory(params struct {
-	CoinSymbol   string
-	BeginTime    int64
-	EndTime      int64
-	TransferType string
-	Page         int
-	Limit        int
+	ContractName  string
+	BeginTime     int64
+	EndTime       int64
+	AutoCloseType string
+	Page          int
+	Limit         int
 }) ([]byte, error) {
 	query := url.Values{}
-	query.Set("contractName", params.CoinSymbol)
+	query.Set("contractName", params.ContractName)
 	if params.BeginTime > 0 {
 		query.Set("beginTime", strconv.FormatInt(params.BeginTime, 10))
 	}
 	if params.EndTime > 0 {
 		query.Set("endTime", strconv.FormatInt(params.EndTime, 10))
 	}
-	if params.TransferType != "" {
-		query.Set("autoCloseType", params.TransferType)
+	if params.AutoCloseType != "" {
+		query.Set("autoCloseType", params.AutoCloseType)
 	}
 	if params.Page > 0 {
 		query.Set("page", strconv.Itoa(params.Page))

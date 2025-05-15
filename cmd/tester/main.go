@@ -8,7 +8,6 @@ import (
 
 	"github.com/lackyband/gox/bitrueFutures"
 	"github.com/lackyband/gox/bitrueSpot"
-	"github.com/lackyband/gox/common"
 )
 
 func main() {
@@ -122,7 +121,7 @@ func main() {
 
 	// Futures: Subscribe to depth
 	if err := futuresClient.SubscribeDepth("e_btcusdt", func(msg []byte) {
-		var wsMsg common.WebSocketMessage
+		var wsMsg bitrueFutures.WebSocketMessage
 		if err := json.Unmarshal(msg, &wsMsg); err != nil {
 			fmt.Printf("Failed to parse futures depth message: %v\n", err)
 			return
@@ -142,7 +141,7 @@ func main() {
 
 	// Spot: Subscribe to depth
 	if err := spotClient.SubscribeDepth("btcusdt", func(msg []byte) {
-		var wsMsg common.WebSocketMessage
+		var wsMsg bitrueSpot.WebSocketMessage
 		if err := json.Unmarshal(msg, &wsMsg); err != nil {
 			fmt.Printf("Failed to parse spot depth message: %v\n", err)
 			return
@@ -177,7 +176,7 @@ func main() {
 	defer futuresClient.StopWebSocketUser()
 
 	if err := futuresClient.SubscribeUserData(futuresListenKey, func(msg []byte) {
-		var wsMsg common.WebSocketMessage
+		var wsMsg bitrueFutures.WebSocketMessage
 		if err := json.Unmarshal(msg, &wsMsg); err != nil {
 			fmt.Printf("Failed to parse futures user message: %v\n", err)
 			return
@@ -212,7 +211,7 @@ func main() {
 	defer spotClient.StopWebSocketUser()
 
 	if err := spotClient.SubscribeUserOrderUpdate(func(msg []byte) {
-		var wsMsg common.WebSocketMessage
+		var wsMsg bitrueSpot.WebSocketMessage
 		if err := json.Unmarshal(msg, &wsMsg); err != nil {
 			fmt.Printf("Failed to parse spot order update message: %v\n", err)
 			return
@@ -224,7 +223,7 @@ func main() {
 	}
 
 	if err := spotClient.SubscribeUserBalanceUpdate(func(msg []byte) {
-		var wsMsg common.WebSocketMessage
+		var wsMsg bitrueSpot.WebSocketMessage
 		if err := json.Unmarshal(msg, &wsMsg); err != nil {
 			fmt.Printf("Failed to parse spot balance update message: %v\n", err)
 			return
