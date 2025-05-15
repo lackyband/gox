@@ -14,7 +14,7 @@ Clone or include the `bitrueMFutures` package in your Go module:
 
 ```bash
 # If the module is hosted on GitHub, replace <repository> with the actual path
-go get github.com/<repository>/bitrueMFutures
+go get github.com/lackyband/gox/bitrueMFutures
 ```
 
 Alternatively, copy the `bitrueMFutures` package into your project directory.
@@ -29,7 +29,7 @@ Alternatively, copy the `bitrueMFutures` package into your project directory.
 Place the `bitrueMFutures` package in your project directory or import it as a module. A typical setup might look like:
 
 ```
-my_project/
+gox/
 ├── bitrueMFutures/
 │   └── bitrueMFutures.go
 ├── main.go
@@ -39,7 +39,7 @@ my_project/
 Initialize your Go module:
 
 ```bash
-go mod init my_project
+go mod init github.com/lackyband/gox
 ```
 
 ### Dependencies
@@ -60,7 +60,7 @@ package main
 import (
 	"fmt"
 	"os"
-	"my_project/bitrueMFutures"
+	"github.com/lackyband/gox/bitrueMFutures"
 )
 
 func main() {
@@ -75,7 +75,7 @@ func main() {
 }
 ```
 
-Set environment variables for security:
+Set environment variables for security (these must be set before running examples):
 
 ```bash
 export BITRUE_API_KEY="your_api_key"
