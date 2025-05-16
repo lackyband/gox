@@ -1,4 +1,4 @@
-module github.com/lackyband/gox/cmd/bitrue_test
+module github.com/lackyband/gox/wsutil/wsmanager
 
 go 1.22.2
 

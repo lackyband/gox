@@ -1,4 +1,4 @@
-package tester
+package ws_bitrue_testutil
 
 import (
 	"bytes"
