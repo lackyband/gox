@@ -2,6 +2,7 @@ package bitrueMFutures
 
 import (
 	"bytes"
+	"compress/gzip"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
@@ -115,9 +116,9 @@ func (w *WebSocketClient) ReadMessages(isMarket bool) {
 			}
 			_, message, err := w.conn.ReadMessage()
 			if err != nil {
-				if len(message) > 0 {
-					fmt.Printf("DEBUG: WebSocket last message before error: %s\n", string(message))
-				}
+				// if len(message) > 0 {
+				// 	fmt.Printf("DEBUG: WebSocket last message before error: %s\n", string(message))
+				// }
 				fmt.Printf("WebSocket read error: %v\n", err)
 				w.Close()
 				return
@@ -241,7 +242,6 @@ func (c *BitrueMClient) StartWebSocketUser(listenKey string) error {
 	}
 
 	wsURL := fmt.Sprintf("%s/stream?listenKey=%s", c.wsUserURL, listenKey)
-	fmt.Printf("DEBUG: Connecting to user WebSocket URL: %s\n", wsURL)
 	c.wsUserClient = NewWebSocketClient(wsURL)
 	if err := c.wsUserClient.Connect(c.apiKey); err != nil {
 		return fmt.Errorf("failed to connect to WebSocket: %v", err)
@@ -500,15 +500,6 @@ func (c *BitrueMClient) DoRequest(method, baseURL, endpoint string, params url.V
 			signature := c.GenerateSignature(signingString)
 			req.Header.Set("X-CH-SIGN", signature)
 			req.Header.Set("X-CH-TS", strconv.FormatInt(timestamp, 10))
-		}
-
-		fmt.Printf("FUTURES-M DEBUG: REQUEST URL: %s\n", req.URL.String())
-		fmt.Printf("FUTURES-M DEBUG: REQUEST HEADERS:\n")
-		for k, v := range req.Header {
-			fmt.Printf("  %s: %s\n", k, v)
-		}
-		if bodyBytes != nil {
-			fmt.Printf("FUTURES-M DEBUG: REQUEST BODY: %s\n", string(bodyBytes))
 		}
 
 		resp, err := c.httpClient.Do(req)

@@ -428,22 +428,13 @@ func (c *BitrueClient) doRequest(method, endpoint string, params url.Values, bod
 			if body != nil {
 				signingString += "&" + body.Encode()
 			}
-			fmt.Printf("DEBUG SIGNING STRING: %s\n", signingString)
 			signature := c.GenerateSignature(signingString)
-			fmt.Printf("DEBUG SIGNATURE: %s\n", signature)
 			signedQuery := params.Encode() + "&signature=" + signature
 			u.RawQuery = signedQuery
 			req.URL = u
 		}
 
-		fmt.Printf("\nDEBUG REQUEST URL: %s\n", req.URL.String())
-		fmt.Printf("DEBUG REQUEST HEADERS:\n")
-		for k, v := range req.Header {
-			fmt.Printf("  %s: %s\n", k, v)
-		}
-		if body != nil {
-			fmt.Printf("DEBUG REQUEST BODY: %s\n", body.Encode())
-		}
+
 
 		resp, err := c.httpClient.Do(req)
 		if err != nil {

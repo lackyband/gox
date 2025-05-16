@@ -240,7 +240,6 @@ func (c *BitrueClient) StartWebSocketUser(listenKey string) error {
 	}
 
 	wsURL := fmt.Sprintf("%s/stream?listenKey=%s", c.wsUserURL, listenKey)
-	fmt.Printf("DEBUG: Connecting to user WebSocket URL: %s\n", wsURL)
 	c.wsUserClient = NewWebSocketClient(wsURL)
 	if err := c.wsUserClient.Connect(c.apiKey); err != nil {
 		return fmt.Errorf("failed to connect to WebSocket: %v", err)
@@ -323,14 +322,7 @@ func (c *BitrueClient) DoRequest(method, baseURL, endpoint string, params url.Va
 			req.Header.Set("X-CH-TS", strconv.FormatInt(timestamp, 10))
 		}
 
-		fmt.Printf("COPYTRADE DEBUG: REQUEST URL: %s\n", req.URL.String())
-		fmt.Printf("COPYTRADE DEBUG: REQUEST HEADERS:\n")
-		for k, v := range req.Header {
-			fmt.Printf("  %s: %s\n", k, v)
-		}
-		if bodyBytes != nil {
-			fmt.Printf("COPYTRADE DEBUG: REQUEST BODY: %s\n", string(bodyBytes))
-		}
+
 
 		resp, err := c.httpClient.Do(req)
 		if err != nil {

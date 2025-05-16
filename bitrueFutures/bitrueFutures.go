@@ -472,15 +472,6 @@ func (c *BitrueClient) DoRequest(method, baseURL, endpoint string, params url.Va
 			req.Header.Set("X-CH-TS", strconv.FormatInt(timestamp, 10))
 		}
 
-		fmt.Printf("FUTURES DEBUG: REQUEST URL: %s\n", req.URL.String())
-		fmt.Printf("FUTURES DEBUG: REQUEST HEADERS:\n")
-		for k, v := range req.Header {
-			fmt.Printf("  %s: %s\n", k, v)
-		}
-		if bodyBytes != nil {
-			fmt.Printf("FUTURES DEBUG: REQUEST BODY: %s\n", string(bodyBytes))
-		}
-
 		resp, err := c.httpClient.Do(req)
 		if err != nil {
 			lastErr = fmt.Errorf("request failed: %v", err)
