@@ -60,29 +60,29 @@ func (w *WebSocketClient) SetCallback(cb WebSocketMessageHandler) {
 
 // QueryOrderParams represents parameters for querying a copy trading order
 type QueryOrderParams struct {
-	ContractName string `json:"contractName"`
-	OrderID      string `json:"orderId,omitempty"`
+	ContractName  string `json:"contractName"`
+	OrderID       string `json:"orderId,omitempty"`
 	ClientOrderID string `json:"clientOrderId,omitempty"`
 }
 
 // OrderParams represents parameters for placing a new copy trading order
 type OrderParams struct {
-	ContractName           string  `json:"contractName"`
-	ClientOrderID          int64   `json:"clientOrderId"`
-	Side                   string  `json:"side"`
-	Type                   string  `json:"type"`
-	PositionType           int     `json:"positionType"`
-	Open                   string  `json:"open"`
-	Volume                 float64 `json:"volume"`
-	Amount                 float64 `json:"amount"`
-	Price                  float64 `json:"price"`
-	Leverage               int     `json:"leverage"`
-	TriggerOrderType       int     `json:"triggerOrderType"`
-	TriggerType            int     `json:"triggerType"`
-	TriggerPriceType       int     `json:"triggerPriceType"`
-	TriggerPrice           float64 `json:"triggerPrice"`
-	ConditionOrder         bool    `json:"conditionOrder"`
-	PositionID             int64   `json:"positionId,omitempty"`
+	ContractName             string  `json:"contractName"`
+	ClientOrderID            int64   `json:"clientOrderId"`
+	Side                     string  `json:"side"`
+	Type                     string  `json:"type"`
+	PositionType             int     `json:"positionType"`
+	Open                     string  `json:"open"`
+	Volume                   float64 `json:"volume"`
+	Amount                   float64 `json:"amount"`
+	Price                    float64 `json:"price"`
+	Leverage                 int     `json:"leverage"`
+	TriggerOrderType         int     `json:"triggerOrderType"`
+	TriggerType              int     `json:"triggerType"`
+	TriggerPriceType         int     `json:"triggerPriceType"`
+	TriggerPrice             float64 `json:"triggerPrice"`
+	ConditionOrder           bool    `json:"conditionOrder"`
+	PositionID               int64   `json:"positionId,omitempty"`
 	TriggerOrderCreateParams []struct {
 		ClientOrderID    int64   `json:"clientOrderId"`
 		TriggerType      int     `json:"triggerType"`
@@ -321,8 +321,6 @@ func (c *BitrueClient) DoRequest(method, baseURL, endpoint string, params url.Va
 			req.Header.Set("X-CH-SIGN", signature)
 			req.Header.Set("X-CH-TS", strconv.FormatInt(timestamp, 10))
 		}
-
-
 
 		resp, err := c.httpClient.Do(req)
 		if err != nil {
