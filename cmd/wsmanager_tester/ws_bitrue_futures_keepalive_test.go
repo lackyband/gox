@@ -1,10 +1,8 @@
 package tester
 
 import (
-	"encoding/json"
 	"fmt"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 	"github.com/gorilla/websocket"

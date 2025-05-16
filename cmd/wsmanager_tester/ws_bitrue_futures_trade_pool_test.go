@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 	"github.com/gorilla/websocket"
+	"./ws_bitrue_testutil"
 )
 
 type BitrueContract struct {

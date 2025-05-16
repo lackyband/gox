@@ -101,7 +101,6 @@ type CancelOrderParams struct {
 	ConditionOrder bool   `json:"conditionOrder"`
 }
 
-
 // Connect establishes a WebSocket connection
 func (w *WebSocketClient) Connect(apiKey string) error {
 	w.mutex.Lock()
@@ -371,8 +370,6 @@ func (c *BitrueClient) GenerateSignature(signingString string) string {
 	mac.Write([]byte(signingString))
 	return hex.EncodeToString(mac.Sum(nil))
 }
-
-// REST API Endpoints
 
 // OpenOrders retrieves all open copy trading orders
 func (c *BitrueClient) OpenOrders(contractName string) ([]byte, error) {

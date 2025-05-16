@@ -2,7 +2,6 @@ package bitrueMFutures
 
 import (
 	"bytes"
-	"compress/gzip"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
@@ -447,6 +446,13 @@ func (c *BitrueMClient) GetWebSocketMessages(isMarket bool) chan []byte {
 	return c.wsUserClient.messageChan
 }
 
+// GenerateSignature creates an HMAC SHA256 signature
+func (c *BitrueMClient) GenerateSignature(signingString string) string {
+	mac := hmac.New(sha256.New, []byte(c.secretKey))
+	mac.Write([]byte(signingString))
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
 // DoRequest executes an HTTP request with headers and signature
 func (c *BitrueMClient) DoRequest(method, baseURL, endpoint string, params url.Values, body interface{}, signed bool) ([]byte, error) {
 	const maxRetries = 3
@@ -485,7 +491,7 @@ func (c *BitrueMClient) DoRequest(method, baseURL, endpoint string, params url.V
 
 		if signed {
 			timestamp := time.Now().UnixMilli()
-			// Signature in headers
+			// Signature in headers (default behavior)
 			path := u.Path
 			if u.RawQuery != "" {
 				path += "?" + u.RawQuery
@@ -496,13 +502,13 @@ func (c *BitrueMClient) DoRequest(method, baseURL, endpoint string, params url.V
 			req.Header.Set("X-CH-TS", strconv.FormatInt(timestamp, 10))
 		}
 
-		fmt.Printf("DEBUG: REQUEST URL: %s\n", req.URL.String())
-		fmt.Printf("DEBUG: REQUEST HEADERS:\n")
+		fmt.Printf("FUTURES-M DEBUG: REQUEST URL: %s\n", req.URL.String())
+		fmt.Printf("FUTURES-M DEBUG: REQUEST HEADERS:\n")
 		for k, v := range req.Header {
 			fmt.Printf("  %s: %s\n", k, v)
 		}
 		if bodyBytes != nil {
-			fmt.Printf("DEBUG: REQUEST BODY: %s\n", string(bodyBytes))
+			fmt.Printf("FUTURES-M DEBUG: REQUEST BODY: %s\n", string(bodyBytes))
 		}
 
 		resp, err := c.httpClient.Do(req)
@@ -535,305 +541,6 @@ func (c *BitrueMClient) DoRequest(method, baseURL, endpoint string, params url.V
 	}
 
 	return nil, fmt.Errorf("failed after %d attempts: %v", maxRetries, lastErr)
-}
-
-// GenerateSignature creates an HMAC SHA256 signature
-func (c *BitrueMClient) GenerateSignature(signingString string) string {
-	mac := hmac.New(sha256.New, []byte(c.secretKey))
-	mac.Write([]byte(signingString))
-	return hex.EncodeToString(mac.Sum(nil))
-}
-
-// REST API Endpoints
-
-// Ping tests connectivity to the API
-func (c *BitrueMClient) Ping() ([]byte, error) {
-	return c.DoRequest(http.MethodGet, c.baseURL, "/dapi/v1/ping", nil, nil, false)
-}
-
-// ServerTime retrieves the server time
-func (c *BitrueMClient) ServerTime() ([]byte, error) {
-	return c.DoRequest(http.MethodGet, c.baseURL, "/dapi/v1/time", nil, nil, false)
-}
-
-// Contracts retrieves current open contracts
-func (c *BitrueMClient) Contracts() ([]byte, error) {
-	return c.DoRequest(http.MethodGet, c.baseURL, "/dapi/v1/contracts", nil, nil, false)
-}
-
-// Depth retrieves the order book
-func (c *BitrueMClient) Depth(contractName string, limit int) ([]byte, error) {
-	params := url.Values{}
-	params.Set("contractName", contractName)
-	if limit > 0 {
-		params.Set("limit", strconv.Itoa(limit))
-	}
-	return c.DoRequest(http.MethodGet, c.baseURL, "/dapi/v1/depth", params, nil, false)
-}
-
-// Ticker retrieves 24-hour price statistics
-func (c *BitrueMClient) Ticker(contractName string) ([]byte, error) {
-	params := url.Values{}
-	params.Set("contractName", contractName)
-	return c.DoRequest(http.MethodGet, c.baseURL, "/dapi/v1/ticker", params, nil, false)
-}
-
-// Klines retrieves Kline/Candlestick data
-func (c *BitrueMClient) Klines(contractName, interval string, limit int) ([]byte, error) {
-	params := url.Values{}
-	params.Set("contractName", contractName)
-	params.Set("interval", interval)
-	if limit > 0 {
-		params.Set("limit", strconv.Itoa(limit))
-	}
-	return c.DoRequest(http.MethodGet, c.baseURL, "/dapi/v1/klines", params, nil, false)
-}
-
-// MyTrades retrieves trade history
-func (c *BitrueMClient) MyTrades(params struct {
-	ContractName string
-	FromID       int64
-	Limit        int
-	StartTime    int64
-	EndTime      int64
-}) ([]byte, error) {
-	query := url.Values{}
-	query.Set("contractName", params.ContractName)
-	if params.FromID > 0 {
-		query.Set("fromId", strconv.FormatInt(params.FromID, 10))
-	}
-	if params.Limit > 0 {
-		query.Set("limit", strconv.Itoa(params.Limit))
-	}
-	if params.StartTime > 0 {
-		query.Set("startTime", strconv.FormatInt(params.StartTime, 10))
-	}
-	if params.EndTime > 0 {
-		query.Set("endTime", strconv.FormatInt(params.EndTime, 10))
-	}
-	return c.DoRequest(http.MethodGet, c.baseURL, "/dapi/v2/myTrades", query, nil, true)
-}
-
-// ModifyPositionMargin modifies isolated position margin
-func (c *BitrueMClient) ModifyPositionMargin(params struct {
-	ContractName string
-	Amount       float64
-}) ([]byte, error) {
-	body := map[string]interface{}{
-		"contractName": params.ContractName,
-		"amount":       params.Amount,
-	}
-	return c.DoRequest(http.MethodPost, c.baseURL, "/dapi/v2/positionMargin", nil, body, true)
-}
-
-// ChangeLeverage changes initial leverage
-func (c *BitrueMClient) ChangeLeverage(contractName string, leverage int) ([]byte, error) {
-	body := map[string]interface{}{
-		"contractName": contractName,
-		"leverage":     leverage,
-	}
-	return c.DoRequest(http.MethodPost, c.baseURL, "/dapi/v2/level_edit", nil, body, true)
-}
-
-// OpenOrders retrieves all open orders
-func (c *BitrueMClient) OpenOrders(contractName string) ([]byte, error) {
-	params := url.Values{}
-	params.Set("contractName", contractName)
-	return c.DoRequest(http.MethodGet, c.baseURL, "/dapi/v2/openOrders", params, nil, true)
-}
-
-// CancelOrder cancels an order
-func (c *BitrueMClient) CancelOrder(params struct {
-	ContractName   string
-	ClientOrderID  string
-	OrderID        int64
-	ConditionOrder bool
-}) ([]byte, error) {
-	body := map[string]interface{}{
-		"contractName":   params.ContractName,
-		"conditionOrder": params.ConditionOrder,
-	}
-	if params.ClientOrderID != "" {
-		body["clientOrderId"] = params.ClientOrderID
-	}
-	if params.OrderID > 0 {
-		body["orderId"] = params.OrderID
-	}
-	return c.DoRequest(http.MethodPost, c.baseURL, "/dapi/v2/cancel", nil, body, true)
-}
-
-// QueryOrder queries an order
-func (c *BitrueMClient) QueryOrder(params struct {
-	ContractName   string
-	ClientOrderID  string
-	OrderID        int64
-	ConditionOrder bool
-}) ([]byte, error) {
-	query := url.Values{}
-	query.Set("contractName", params.ContractName)
-	if params.ClientOrderID != "" {
-		query.Set("clientOrderId", params.ClientOrderID)
-	}
-	if params.OrderID > 0 {
-		query.Set("orderId", strconv.FormatInt(params.OrderID, 10))
-	}
-	if params.ConditionOrder {
-		query.Set("conditionOrder", "true")
-	}
-	return c.DoRequest(http.MethodGet, c.baseURL, "/dapi/v2/order", query, nil, true)
-}
-
-// NewOrder places a new order
-func (c *BitrueMClient) NewOrder(params struct {
-	ContractName       string
-	ClientOrderID      string
-	Side               string
-	Type               string
-	PositionType       int
-	Open               string
-	Volume             float64
-	Amount             float64
-	Price              float64
-	Leverage           int
-	TriggerOrderType   int
-	TriggerType        int
-	TriggerPriceType   int
-	TriggerPrice       float64
-	ConditionOrder     bool
-	PositionID         int
-	TriggerOrderParams []map[string]interface{}
-}) ([]byte, error) {
-	body := map[string]interface{}{
-		"contractName":   params.ContractName,
-		"side":           params.Side,
-		"type":           params.Type,
-		"positionType":   params.PositionType,
-		"open":           params.Open,
-		"volume":         params.Volume,
-		"amount":         params.Amount,
-		"price":          params.Price,
-		"leverage":       params.Leverage,
-		"conditionOrder": params.ConditionOrder,
-	}
-	if params.ClientOrderID != "" {
-		body["clientOrderId"] = params.ClientOrderID
-	}
-	if params.TriggerOrderType > 0 {
-		body["triggerOrderType"] = params.TriggerOrderType
-	}
-	if params.TriggerType > 0 {
-		body["triggerType"] = params.TriggerType
-	}
-	if params.TriggerPriceType > 0 {
-		body["triggerPriceType"] = params.TriggerPriceType
-	}
-	if params.TriggerPrice > 0 {
-		body["triggerPrice"] = params.TriggerPrice
-	}
-	if params.PositionID > 0 {
-		body["positionId"] = params.PositionID
-	}
-	if len(params.TriggerOrderParams) > 0 {
-		body["triggerOrderCreateParams"] = params.TriggerOrderParams
-	}
-	return c.DoRequest(http.MethodPost, c.baseURL, "/dapi/v2/order", nil, body, true)
-}
-
-// Account retrieves account information
-func (c *BitrueMClient) Account() ([]byte, error) {
-	return c.DoRequest(http.MethodGet, c.baseURL, "/dapi/v2/account", nil, nil, true)
-}
-
-// LeverageBracket retrieves leverage brackets
-func (c *BitrueMClient) LeverageBracket(contractName string) ([]byte, error) {
-	params := url.Values{}
-	params.Set("contractName", contractName)
-	return c.DoRequest(http.MethodGet, c.baseURL, "/dapi/v2/leverageBracket", params, nil, true)
-}
-
-// CommissionRate retrieves commission rates
-func (c *BitrueMClient) CommissionRate(contractName string) ([]byte, error) {
-	params := url.Values{}
-	params.Set("contractName", contractName)
-	return c.DoRequest(http.MethodGet, c.baseURL, "/dapi/v2/commissionRate", params, nil, true)
-}
-
-// FuturesTransfer transfers funds between wallet and futures account
-func (c *BitrueMClient) FuturesTransfer(coinSymbol string, amount float64, transferType, unionID string) ([]byte, error) {
-	body := map[string]interface{}{
-		"coinSymbol":   coinSymbol,
-		"amount":       amount,
-		"transferType": transferType,
-	}
-	if unionID != "" {
-		body["unionId"] = unionID
-	}
-	return c.DoRequest(http.MethodPost, c.baseURL, "/dapi/v2/futures_transfer", nil, body, true)
-}
-
-// FuturesTransferHistory retrieves transfer history
-func (c *BitrueMClient) FuturesTransferHistory(params struct {
-	CoinSymbol   string
-	BeginTime    int64
-	EndTime      int64
-	TransferType string
-	Page         int
-	Limit        int
-}) ([]byte, error) {
-	query := url.Values{}
-	if params.CoinSymbol != "" {
-		query.Set("coinSymbol", params.CoinSymbol)
-	}
-	if params.BeginTime > 0 {
-		query.Set("beginTime", strconv.FormatInt(params.BeginTime, 10))
-	}
-	if params.EndTime > 0 {
-		query.Set("endTime", strconv.FormatInt(params.EndTime, 10))
-	}
-	query.Set("transferType", params.TransferType)
-	if params.Page > 0 {
-		query.Set("page", strconv.Itoa(params.Page))
-	}
-	if params.Limit > 0 {
-		query.Set("limit", strconv.Itoa(params.Limit))
-	}
-	return c.DoRequest(http.MethodGet, c.baseURL, "/dapi/v2/futures_transfer_history", query, nil, true)
-}
-
-// ForceOrdersHistory retrieves forced liquidation order history
-func (c *BitrueMClient) ForceOrdersHistory(params struct {
-	ContractName  string
-	BeginTime     int64
-	EndTime       int64
-	AutoCloseType string
-	Page          int
-	Limit         int
-}) ([]byte, error) {
-	query := url.Values{}
-	query.Set("contractName", params.ContractName)
-	if params.BeginTime > 0 {
-		query.Set("beginTime", strconv.FormatInt(params.BeginTime, 10))
-	}
-	if params.EndTime > 0 {
-		query.Set("endTime", strconv.FormatInt(params.EndTime, 10))
-	}
-	if params.AutoCloseType != "" {
-		query.Set("autoCloseType", params.AutoCloseType)
-	}
-	if params.Page > 0 {
-		query.Set("page", strconv.Itoa(params.Page))
-	}
-	if params.Limit > 0 {
-		query.Set("limit", strconv.Itoa(params.Limit))
-	}
-	return c.DoRequest(http.MethodGet, c.baseURL, "/dapi/v2/forceOrdersHistory", query, nil, true)
-}
-
-// User Stream Endpoints
-
-// CreateListenKey creates a new user data stream listenKey
-func (c *BitrueMClient) CreateListenKey() ([]byte, error) {
-	return c.DoRequest(http.MethodPost, c.userStreamURL, "/user_stream/api/v1/listenKey", nil, nil, true)
 }
 
 // KeepAliveListenKey extends the validity of a listenKey
